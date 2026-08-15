@@ -7,81 +7,86 @@ full-context ("full LL") ATN prediction path
 
 This is distilled from a real crash hit in
 [JugglingLab](https://github.com/jkboyce/jugglinglab) (a Kotlin Multiplatform
-app), fixed in commit `a647fd56a4f6dec6eec7c85c6bcd399b642d061d` by forcing
-`PredictionMode.SLL` on the parser. Versions here are pinned to match that
-project exactly: **Kotlin 2.3.21**, **antlr-kotlin 1.0.10**, **Gradle
-9.4.1**.
+app) -- specifically the `pattern parsing non-first brace values` test in
+`SiteswapPatternTest.kt` -- fixed in commit
+`a647fd56a4f6dec6eec7c85c6bcd399b642d061d` by forcing `PredictionMode.SLL`
+on the parser. Versions here are pinned to match that project exactly:
+**Kotlin 2.3.21**, **antlr-kotlin 1.0.10**, **Gradle 9.4.1**.
+
+**Status: confirmed reproduced** on macOS arm64 Release (see "Confirmed
+results" below) -- no iOS simulator needed, since macOS and iOS share the
+same Kotlin/Native LLVM backend and release optimizer.
 
 ## The idea
 
-`Repro.g4` (under `antlr/`) has one deliberately ambiguous rule:
+`antlr/JlSiteswap.g4` is JugglingLab's actual siteswap-notation grammar,
+copied verbatim from
+`composeApp/antlr/JlSiteswap.g4` in that repo. `ReproParser.kt` parses
+input at the `pattern` rule, exactly as JugglingLab's own
+`SiteswapParser.kt` does, using these inputs (taken directly from the
+failing test):
 
-```antlr
-stat : ID ';'   // alt 1
-     | ID ';'   // alt 2 -- identical to alt 1
-     ;
+```
+"{5}{1}"
+"5{1}"
+"{5}1{5}1"
 ```
 
-Because both alternatives accept exactly the same input, ANTLR4's adaptive
-LL(*) algorithm can't resolve that decision with single-token-lookahead
-(SLL) prediction alone. It has to escalate to full-context ("full LL")
-prediction to confirm the ambiguity -- which is exactly the code path
-(`computeReachSet`) that appears to break under Kotlin/Native's Release
-optimizer. In a *Debug* build (no `-opt`) this all works fine; in a
-*Release* build it's expected to crash.
+These all use `{...}` brace-notation throws in non-first position. That
+shape drives the parser into an ambiguous decision that ANTLR4's adaptive
+LL(*) algorithm can't resolve with single-token-lookahead (SLL) prediction
+alone, forcing escalation to full-context ("full LL") prediction --
+exactly the code path (`computeReachSet`) that breaks under Kotlin/Native's
+Release optimizer. In a *Debug* build (no `-opt`) this all works fine; in a
+*Release* build it crashes with a Kotlin exception (not a hard segfault):
+
+```
+RuntimeException: Unexpected receiver type: kotlin.collections.ArrayList
+```
+
+(An earlier version of this repro used a small synthetic grammar with a
+single locally-ambiguous rule. That did **not** reproduce the crash --
+likely because that decision was resolvable within SLL itself, since it
+wasn't context-dependent across multiple call sites the way `pattern`'s
+recursion through `groupedpattern` is. Switching to the real grammar and
+real failing inputs above is what made this reproduce.)
 
 `src/commonMain/kotlin/repro/ReproParser.kt` has a single toggle,
 `FORCE_SLL_WORKAROUND`, mirroring the JugglingLab fix. Left at `false`
-(default), the parser uses ANTLR4's normal adaptive mode and should hit the
+(default), the parser uses ANTLR4's normal adaptive mode and hits the
 crash on Release/Native. Flip it to `true` and it forces SLL-only
-prediction (never escalates), which is expected to make the crash go away
-on every target/build type.
-
-## ⚠️ Note on how far I could validate this myself
-
-I generated and hand-checked all of this code, but I could not actually run
-a full Gradle build in my own sandbox -- it doesn't have network access to
-Maven Central, only to a handful of registries (npm, PyPI, etc.), so
-dependency resolution for Kotlin/antlr-kotlin fails there. I also can't
-build Apple targets (macOS/iOS) from Linux at all -- Kotlin/Native only
-cross-compiles Apple targets from a macOS host.
-
-So: the grammar, Kotlin syntax, and Gradle wiring below are careful, but
-**your first build on your Mac is the first real test.** If anything fails
-at the `generateGrammarSource` or compile step (as opposed to actually
-running and crashing/succeeding), paste me the output and I'll fix it fast
--- that would be a mistake in this scaffolding, not something informative
-about the underlying bug.
+prediction (never escalates), which makes the crash go away on every
+target/build type.
 
 ## Running it
 
-### 1. JVM baseline (expected: always succeeds)
+### 1. JVM baseline (always succeeds)
 
 ```
 ./gradlew runJvm
 ```
 
-This should print a successful parse regardless of `FORCE_SLL_WORKAROUND`,
+Parses all three inputs successfully regardless of `FORCE_SLL_WORKAROUND`,
 since the JVM has no separate "release optimizer" the way Kotlin/Native
 does. This is the control case showing the bug is Native-specific.
 
-### 2. macOS native (expected: Release crashes, Debug succeeds)
+### 2. macOS native (Release crashes, Debug succeeds)
 
 This is the easiest way to reproduce the actual bug -- same Kotlin/Native
 LLVM backend and release optimizer as iOS, but runs directly on your Mac
 with no simulator or signing needed.
 
 ```
-./gradlew runDebugExecutableMacosArm64      # expected: succeeds, prints parse result
-./gradlew runReleaseExecutableMacosArm64    # expected: crashes
+./gradlew runDebugExecutableMacosArm64      # succeeds, prints parse results
+./gradlew runReleaseExecutableMacosArm64    # crashes with RuntimeException
 ```
 
 (Use `MacosX64` instead of `MacosArm64` if you're on an Intel Mac.)
 
 ### 3. iOS (closer to the original failure environment)
 
-Gradle only auto-generates a `run...` task for targets matching your host
-architecture, so for iOS you build and then run the binary yourself:
+Not needed to reproduce (confirmed on macOS already), but if you want to
+double check on iOS specifically:
 
 ```
 ./gradlew linkReleaseExecutableIosSimulatorArm64
@@ -124,27 +129,22 @@ const val FORCE_SLL_WORKAROUND = false
 ```
 
 to `true`, then re-run `runReleaseExecutableMacosArm64` (or the iOS
-equivalent). Expected result: it now succeeds, same as Debug -- confirming
-the same fix that worked in JugglingLab also fixes it here.
+equivalent). Result: it now succeeds, same as Debug -- confirming the same
+fix that worked in JugglingLab also fixes it here.
 
-## Expected results summary
+## Confirmed results
 
-| Target                  | Build type | `FORCE_SLL_WORKAROUND=false` | `FORCE_SLL_WORKAROUND=true` |
-|--------------------------|------------|-------------------------------|-------------------------------|
-| JVM                      | n/a        | succeeds                      | succeeds                      |
-| macOS (arm64/x64)        | Debug      | succeeds                      | succeeds                      |
-| macOS (arm64/x64)        | Release    | **crashes**                   | succeeds                      |
-| iOS simulator (arm64)    | Debug      | succeeds                      | succeeds                      |
-| iOS simulator (arm64)    | Release    | **crashes**                   | succeeds                      |
-
-If your results differ from this table -- e.g. it doesn't crash anywhere,
-or it crashes even with the workaround -- that's actually useful
-information too (maybe the bug is narrower or wider than we think); let me
-know what you see either way before we write up the issue.
+| Target             | Build type | `FORCE_SLL_WORKAROUND=false`                                    | `FORCE_SLL_WORKAROUND=true` |
+|---------------------|------------|-------------------------------------------------------------------|-------------------------------|
+| JVM                  | n/a        | succeeds                                                           | succeeds                      |
+| macOS arm64          | Debug      | succeeds                                                           | succeeds                      |
+| macOS arm64          | Release    | **crashes** -- `RuntimeException: Unexpected receiver type: kotlin.collections.ArrayList` (all 3 inputs) | succeeds |
+| iOS simulator (arm64)| Debug      | not tested (macOS confirms it; same Native backend)                | --                             |
+| iOS simulator (arm64)| Release    | not tested (macOS confirms it; same Native backend)                | --                             |
 
 ## Filing this upstream
 
-Once confirmed, the recommended path is to file against
+Recommended path: file against
 [Strumenta/antlr-kotlin](https://github.com/Strumenta/antlr-kotlin/issues)
 first, since they can either identify a runtime-side fix or redirect to
 JetBrains' YouTrack (Kotlin project "KT") with a more surgical
@@ -154,9 +154,10 @@ miscompilation rather than a library issue. Include:
 - This repo (push it to its own public GitHub repo first).
 - Exact toolchain versions: Kotlin 2.3.21, antlr-kotlin 1.0.10, Gradle
   9.4.1, plus your Xcode/macOS version.
-- The results table above, filled in with what you actually observed.
-- The crash output itself (exception text, or for a native trap, the crash
-  log -- symbolicate with the `.dSYM` if you can get one).
+- The confirmed-results table above.
+- The crash output: `RuntimeException: Unexpected receiver type:
+  kotlin.collections.ArrayList`.
 - A one-line pointer to the workaround: forcing
   `parser.interpreter.predictionMode = PredictionMode.SLL` avoids the
-  crash, which narrows it to the full-context prediction path.
+  crash, which narrows it to the full-context prediction path
+  (`ParserATNSimulator.computeReachSet`).

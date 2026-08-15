@@ -42,6 +42,8 @@ val generateGrammarSource = tasks.register<AntlrKotlinTask>("generateGrammarSour
     packageName = pkgName
 
     // we want visitors alongside listeners, matching JugglingLab's setup
+    // (grammar source is antlr/JlSiteswap.g4, copied verbatim from
+    // JugglingLab's composeApp/antlr/JlSiteswap.g4)
     arguments = listOf("-visitor")
 
     val outDir = "generatedAntlr/${pkgName.replace(".", "/")}"
