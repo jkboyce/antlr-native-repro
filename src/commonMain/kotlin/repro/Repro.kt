@@ -1,8 +1,10 @@
 package repro
 
-// Inputs taken directly from JugglingLab's `pattern parsing non-first brace
-// values` test (SiteswapPatternTest.kt), which is what exposed the crash.
-private val INPUTS = listOf("{5}{1}", "5{1}", "{5}1{5}1")
+// "5{1}" and "{5}{1}" are the minimal shape of JugglingLab's original
+// crashing inputs (brace-notation throw in non-first position). "51",
+// "555", and "5" are included as negative controls: plain digit sequences
+// never trigger the bug, matching the original grammar's behavior exactly.
+private val INPUTS = listOf("{5}{1}", "5{1}", "51", "555", "5")
 
 fun runRepro() {
     println("=== antlr-kotlin / Kotlin-Native full-context prediction repro ===")

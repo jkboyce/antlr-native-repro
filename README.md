@@ -19,37 +19,67 @@ same Kotlin/Native LLVM backend and release optimizer.
 
 ## The idea
 
-`antlr/JlSiteswap.g4` is JugglingLab's actual siteswap-notation grammar,
-copied verbatim from
-`composeApp/antlr/JlSiteswap.g4` in that repo. `ReproParser.kt` parses
-input at the `pattern` rule, exactly as JugglingLab's own
-`SiteswapParser.kt` does, using these inputs (taken directly from the
-failing test):
+`antlr/Repro.g4` is a **minimal grammar distilled from JugglingLab's real
+siteswap grammar** (`composeApp/antlr/JlSiteswap.g4`), reduced down to just
+5 lines of rules while still reproducing the exact same crash:
+
+```antlr
+pattern : ( groupedpattern | solosequence )+ ;
+
+groupedpattern : '(' pattern ')' ;
+
+solosequence : ( throwvalue )+ ;
+
+throwvalue : '{' DIGIT+ '}' | DIGIT ;
+
+DIGIT : [0-9] ;
+```
+
+`ReproParser.kt` parses input at the `pattern` rule, exactly as
+JugglingLab's own `SiteswapParser.kt` does, using inputs distilled from the
+failing `pattern parsing non-first brace values` test:
 
 ```
-"{5}{1}"
-"5{1}"
-"{5}1{5}1"
+"{5}{1}"   -- crashes
+"5{1}"     -- crashes
+"51"       -- succeeds (negative control)
+"555"      -- succeeds (negative control)
+"5"        -- succeeds (negative control)
 ```
 
-These all use `{...}` brace-notation throws in non-first position. That
-shape drives the parser into an ambiguous decision that ANTLR4's adaptive
-LL(*) algorithm can't resolve with single-token-lookahead (SLL) prediction
-alone, forcing escalation to full-context ("full LL") prediction --
-exactly the code path (`computeReachSet`) that breaks under Kotlin/Native's
-Release optimizer. In a *Debug* build (no `-opt`) this all works fine; in a
-*Release* build it crashes with a Kotlin exception (not a hard segfault):
+Every piece of the grammar above is load-bearing -- removing any of them
+(verified by direct experiment, see the comment block at the top of
+`Repro.g4`) makes the crash go away:
+
+- **`groupedpattern` recursing back into `pattern`.** Real rule recursion
+  (not just a flat loop) is what makes the decision genuinely
+  context-dependent, which is what forces ANTLR to escalate from SLL to
+  full-context ("full LL") prediction -- exactly the code path
+  (`computeReachSet`) that breaks under Kotlin/Native's Release optimizer.
+  A version with the recursion removed still crashed, but stopped
+  respecting the `PredictionMode.SLL` workaround below -- i.e. it was
+  hitting a *different*, looser trigger for the same underlying
+  miscompilation, not the exact mechanism from the original bug.
+- **`solosequence` as a separate rule with its own `+` loop**, nested
+  inside one alternative of `pattern`'s own `+` loop. Collapsing the two
+  loops into one (inlining `solosequence` directly into `pattern`) makes
+  the crash go away entirely.
+- **`throwvalue`'s two-token-vs-one-token shapes** (`'{' DIGIT+ '}'` vs a
+  bare `DIGIT`). Plain digit sequences never trigger the bug; only a
+  brace-notation throw in non-first position does -- matching the original
+  bug ("non-first brace values") exactly.
+
+Passing notation, `WILDCARD`, `SWITCHREVERSE`, paired throws, hand
+specifiers, modifiers, multi-throw brackets, letter/x/p throw values, the
+`number` sub-rule, and whitespace handling were all removed and the crash
+persisted, so none of that is necessary to reproduce this bug.
+
+In a *Debug* build (no `-opt`) this all works fine; in a *Release* build it
+crashes with a Kotlin exception (not a hard segfault):
 
 ```
 RuntimeException: Unexpected receiver type: kotlin.collections.ArrayList
 ```
-
-(An earlier version of this repro used a small synthetic grammar with a
-single locally-ambiguous rule. That did **not** reproduce the crash --
-likely because that decision was resolvable within SLL itself, since it
-wasn't context-dependent across multiple call sites the way `pattern`'s
-recursion through `groupedpattern` is. Switching to the real grammar and
-real failing inputs above is what made this reproduce.)
 
 `src/commonMain/kotlin/repro/ReproParser.kt` has a single toggle,
 `FORCE_SLL_WORKAROUND`, mirroring the JugglingLab fix. Left at `false`
@@ -66,9 +96,9 @@ target/build type.
 ./gradlew runJvm
 ```
 
-Parses all three inputs successfully regardless of `FORCE_SLL_WORKAROUND`,
-since the JVM has no separate "release optimizer" the way Kotlin/Native
-does. This is the control case showing the bug is Native-specific.
+Parses all inputs successfully regardless of `FORCE_SLL_WORKAROUND`, since
+the JVM has no separate "release optimizer" the way Kotlin/Native does.
+This is the control case showing the bug is Native-specific.
 
 ### 2. macOS native (Release crashes, Debug succeeds)
 
@@ -138,7 +168,7 @@ fix that worked in JugglingLab also fixes it here.
 |---------------------|------------|-------------------------------------------------------------------|-------------------------------|
 | JVM                  | n/a        | succeeds                                                           | succeeds                      |
 | macOS arm64          | Debug      | succeeds                                                           | succeeds                      |
-| macOS arm64          | Release    | **crashes** -- `RuntimeException: Unexpected receiver type: kotlin.collections.ArrayList` (all 3 inputs) | succeeds |
+| macOS arm64          | Release    | **crashes** -- `RuntimeException: Unexpected receiver type: kotlin.collections.ArrayList` (brace inputs only; plain-digit inputs still succeed) | succeeds |
 | iOS simulator (arm64)| Debug      | not tested (macOS confirms it; same Native backend)                | --                             |
 | iOS simulator (arm64)| Release    | not tested (macOS confirms it; same Native backend)                | --                             |
 

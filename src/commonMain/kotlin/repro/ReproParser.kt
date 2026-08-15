@@ -6,8 +6,8 @@ import org.antlr.v4.kotlinruntime.CommonTokenStream
 import org.antlr.v4.kotlinruntime.RecognitionException
 import org.antlr.v4.kotlinruntime.Recognizer
 import org.antlr.v4.kotlinruntime.atn.PredictionMode
-import repro.generated.JlSiteswapLexer
-import repro.generated.JlSiteswapParser
+import repro.generated.ReproLexer
+import repro.generated.ReproParser as GeneratedReproParser
 
 // Flip this to `true` to apply the JugglingLab workaround (forcing SLL-only
 // prediction, matching commit a647fd56a4f6dec6eec7c85c6bcd399b642d061d in
@@ -23,9 +23,9 @@ class ReproParseException(message: String) : Exception(message)
 object ReproParser {
     fun parse(input: String): String {
         val stream = CharStreams.fromString(input)
-        val lexer = JlSiteswapLexer(stream)
+        val lexer = ReproLexer(stream)
         val tokens = CommonTokenStream(lexer)
-        val parser = JlSiteswapParser(tokens)
+        val parser = GeneratedReproParser(tokens)
 
         if (FORCE_SLL_WORKAROUND) {
             parser.interpreter.predictionMode = PredictionMode.SLL
