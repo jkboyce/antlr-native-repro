@@ -11,7 +11,7 @@ app) -- specifically the `pattern parsing non-first brace values` test in
 `SiteswapPatternTest.kt` -- fixed in commit
 `a647fd56a4f6dec6eec7c85c6bcd399b642d061d` by forcing `PredictionMode.SLL`
 on the parser. Versions here are pinned to match that project exactly:
-**Kotlin 2.3.21**, **antlr-kotlin 1.0.10**, **Gradle 9.4.1**.
+**Kotlin 2.3.21**, **antlr-kotlin 1.0.13**, **Gradle 9.4.1**.
 
 **Status: confirmed reproduced** on macOS arm64 Release (see "Confirmed
 results" below) -- no iOS simulator needed, since macOS and iOS share the
@@ -111,7 +111,8 @@ with no simulator or signing needed.
 ./gradlew runReleaseExecutableMacosArm64    # crashes with RuntimeException
 ```
 
-(Use `MacosX64` instead of `MacosArm64` if you're on an Intel Mac.)
+(Apple Silicon only -- `macosX64` was dropped from `build.gradle.kts` since
+it's deprecated as of Kotlin 2.3.20.)
 
 ### 3. iOS (closer to the original failure environment)
 
@@ -181,8 +182,8 @@ JetBrains' YouTrack (Kotlin project "KT") with a more surgical
 compiler-only reproduction if it turns out to be true Kotlin/Native
 miscompilation rather than a library issue. Include:
 
-- This repo (push it to its own public GitHub repo first).
-- Exact toolchain versions: Kotlin 2.3.21, antlr-kotlin 1.0.10, Gradle
+- This repo: https://github.com/jkboyce/antlr-native-repro
+- Exact toolchain versions: Kotlin 2.3.21, antlr-kotlin 1.0.13, Gradle
   9.4.1, plus your Xcode/macOS version.
 - The confirmed-results table above.
 - The crash output: `RuntimeException: Unexpected receiver type:

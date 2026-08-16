@@ -7,7 +7,7 @@
 // (see commit a647fd56a4f6dec6eec7c85c6bcd399b642d061d).
 //
 // Versions below are pinned to match the JugglingLab project exactly
-// (Kotlin 2.3.21, antlr-kotlin 1.0.10) so this reproduces under the same
+// (Kotlin 2.3.21, antlr-kotlin 1.0.13) so this reproduces under the same
 // toolchain that hit the original bug.
 //
 // Useful commands:
@@ -21,7 +21,7 @@ import com.strumenta.antlrkotlin.gradle.AntlrKotlinTask
 
 plugins {
     kotlin("multiplatform") version "2.3.21"
-    id("com.strumenta.antlr-kotlin") version "1.0.10"
+    id("com.strumenta.antlr-kotlin") version "1.0.13"
 }
 
 repositories {
@@ -64,13 +64,6 @@ kotlin {
             }
         }
     }
-    macosX64 {
-        binaries {
-            executable {
-                entryPoint = "repro.main"
-            }
-        }
-    }
 
     // Closer to the original failure environment (iOS). Gradle won't
     // generate an automatic `run...` task for these since they don't match
@@ -95,7 +88,7 @@ kotlin {
         commonMain {
             kotlin.srcDir(provider { generateGrammarSource.get() })
             dependencies {
-                implementation("com.strumenta:antlr-kotlin-runtime:1.0.10")
+                implementation("com.strumenta:antlr-kotlin-runtime:1.0.13")
             }
         }
     }
